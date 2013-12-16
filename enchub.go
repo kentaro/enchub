@@ -26,39 +26,35 @@ func main() {
 	log.Fatalf("Server Error: %v", http.ListenAndServe(":"+*port, nil))
 }
 
-func handler(host string) func(http.ResponseWriter, *http.Request) {
+func handler(backend string) func(http.ResponseWriter, *http.Request) {
 	client := new(http.Client)
 
 	return func(writer http.ResponseWriter, request *http.Request) {
-		proxyRequest := duplicateRequest(request, host)
+		proxyRequest := duplicateRequest(request, backend)
 		response, err := client.Do(proxyRequest)
 
 		if err != nil {
 			writer.WriteHeader(500)
 			writer.Write([]byte(err.Error()))
 		} else {
-			writer.WriteHeader(response.StatusCode)
-
 			for key, values := range response.Header {
 				for i := range values {
 					writer.Header().Add(key, values[i])
 				}
 			}
 
+			for _, cookie := range response.Cookies() {
+				cookie.Domain = request.Host
+			}
+
+			writer.WriteHeader(response.StatusCode)
+
 			data, err := ioutil.ReadAll(response.Body)
 
 			if err != nil {
 				writer.Write([]byte(err.Error()))
-				return
-			}
-
-			filtered, err := convertEncoding(replaceCharset(string(data[:]), *to), *from, *to)
-
-			if err != nil {
-				writer.Write([]byte(err.Error()))
-				return
 			} else {
-				writer.Write([]byte(filtered))
+				writer.Write([]byte(data))
 			}
 		}
 	}
@@ -75,10 +71,10 @@ func replaceCharset(content, to string) (result string) {
 	return
 }
 
-func duplicateRequest(request *http.Request, host string) *http.Request {
+func duplicateRequest(request *http.Request, backend string) *http.Request {
 	proxyRequest, err := http.NewRequest(
 		request.Method,
-		fmt.Sprintf("http://%s%s", host, request.URL.String()),
+		fmt.Sprintf("http://%s%s", backend, request.URL.String()),
 		nil,
 	)
 
@@ -86,6 +82,7 @@ func duplicateRequest(request *http.Request, host string) *http.Request {
 		log.Fatalf("Request Error: %v", err)
 	}
 
+	proxyRequest.Host = backend
 	proxyRequest.Proto = request.Proto
 	proxyRequest.Body = request.Body
 
@@ -93,6 +90,10 @@ func duplicateRequest(request *http.Request, host string) *http.Request {
 		for i := range values {
 			proxyRequest.Header.Add(key, values[i])
 		}
+	}
+
+	for _, cookie := range proxyRequest.Cookies() {
+		cookie.Domain = backend
 	}
 
 	return proxyRequest
